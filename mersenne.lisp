@@ -2,6 +2,8 @@
 ;;                   Mersenne Twister                   ;;
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
+(in-package :mersenne)
+
 (defstruct (mt (:constructor make-mt (seed)))
   (index 624)
   (ar (let ((a (make-array '(624))))
