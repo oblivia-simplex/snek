@@ -10,7 +10,6 @@
 (defvar *south* '(0  1))
 (defvar *west*  '(-1 0))
 (defvar *directions* (list *stay* *north* *east* *south* *west*))
-
 (defvar *init-length* 3)
 
 (defstruct (field (:constructor make-field (radius seed)))
@@ -49,7 +48,8 @@
     (elt *directions* (gen))))
 
 (defun tick (field)
-  (incf (field-step field))
+  (unless (equal (field-facing field) *stay*)
+    (incf (field-step field)))
   ;; advance game state by one tick
   (let ((head (car (field-snake field))))
     (push (move head (field-facing field))
@@ -107,22 +107,26 @@
 (defparameter *packet-types*
   '(hello input score output params))
 
-(defun le-dword (vec offset)
+(defun bytes->dword (vec offset)
   (let ((dword 0))
     (loop for i below 4 do
 	 (incf dword
 	       (ash (aref vec (+ i offset)) (* i 8))))
     dword))
 
+(defun dword->bytes (dword)
+  (loop for i below 4 collect
+       (ldb (byte 8 (* i 8)) dword)))
+
 (defun neg32p (n)
   (/= 0 (logand #x80000000 n)))
 
-(defun which-facing (body)
+(defun which-facing (vals)
   (flet ((dir (w)
 	   (cond ((zerop w) 0)
 		 ((neg32p w) -1)
 		 (:otherwise 1))))
-    (list (dir (car body)) (dir (cadr body)))))
+    (list (dir (car vals)) (dir (cadr vals)))))
 
 (defun decode-packet (pkt)
   ;; pkt is a byte vector
@@ -131,9 +135,19 @@
 	 (len (ldb (byte 4 0) hdr))
 	 (body (subseq pkt 1))
 	 (vals (loop for i below len collect
-		    (le-dword body (* i 4)))))
+		    (bytes->dword body (* i 4)))))
     (case typ
       (output (list typ (which-facing vals)))
       (params (list typ vals))
       (:otherwise (list typ vals)))))
     
+(defun encode-packet (field)
+  (let ((vals (concatenate 'list
+			   '(#x16)
+			   (car (field-snake field))
+			   (field-facing field)
+			   (field-apple field))))
+    (coerce (apply #'append (mapcar #'dword->bytes vals))
+	    'vector)))
+    
+			   
