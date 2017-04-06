@@ -4,12 +4,11 @@
 
 (in-package :snek)
 
-(defvar *stay*  '(0  0))
 (defvar *north* '(0 -1))
 (defvar *east*  '(1  0))
 (defvar *south* '(0  1))
 (defvar *west*  '(-1 0))
-(defvar *directions* (list *stay* *north* *east* *south* *west*))
+(defvar *directions* (list *north* *east* *south* *west*))
 (defvar *init-length* 3)
 
 (defstruct (field (:constructor make-field (radius seed)))
@@ -44,7 +43,7 @@
 	  (- (field-radius field) (gen)))))
 
 (defun rnd-dir (field)
-  (flet ((gen () (mod (mersenne:mt-gen (field-prng field)) 5)))
+  (flet ((gen () (mod (mersenne:mt-gen (field-prng field)) 4)))
     (elt *directions* (gen))))
 
 (defun tick (field)
@@ -121,12 +120,22 @@
 (defun neg32p (n)
   (/= 0 (logand #x80000000 n)))
 
-(defun which-facing (vals)
-  (flet ((dir (w)
-	   (cond ((zerop w) 0)
-		 ((neg32p w) -1)
-		 (:otherwise 1))))
-    (list (dir (car vals)) (dir (cadr vals)))))
+(defun turn-snake (field vals)
+  (setf (field-facing field)
+	(turn (field-facing field) (which-turn vals))))
+
+(defun turn (facing turn)
+  (let* ((nd (length *directions*))
+	 (idx (position facing *directions* :test #'equal)))
+    (elt *directions* (mod (+ idx turn) nd))))
+
+
+(defun which-turn (vals)
+  (let* ((idxs '(0 1 2))
+	 (i (reduce (lambda (x y)
+		      (if (> (elt vals x) (elt vals y)) x y))
+		    idxs)))
+    (elt '(-1 0 1) i)))
 
 (defun decode-packet (pkt)
   ;; pkt is a byte vector
