@@ -49,18 +49,19 @@
     (elt *directions* (gen))))
 
 (defun tick (turn field)
-  (incf (field-step field))
-  (turn-facing turn field)
-  ;; advance game state by one tick
-  (let ((head (car (field-snake field))))
-    (push (move head (field-facing field))
-	  (field-snake field))
-    (if (equal (car (field-snake field))
-	       (field-apple field))
-	(spawn-apple field)
-	(setf (field-snake field)
-	      (butlast (field-snake field))))))
-
+  (unless (deadp field)
+    (incf (field-step field))
+    (turn-facing turn field)
+    ;; advance game state by one tick
+    (let ((head (car (field-snake field))))
+      (push (move head (field-facing field))
+	    (field-snake field))
+      (if (equal (car (field-snake field))
+		 (field-apple field))
+	  (spawn-apple field)
+	  (setf (field-snake field)
+		(butlast (field-snake field)))))))
+  
 (defun spawn-apple (field)
   (format t "** spawning apple! **~%")
   (setf (field-apple field) (rnd-pos field)))
@@ -153,8 +154,9 @@
 			   (length *directions*)))))
 
 (defun get-score (field)
-  (min #xFFFFFFFF
-       (* (field-step field) (length (field-snake field)))))
+  (list
+   (min #xFFFFFFFF
+       (* (field-step field) (length (field-snake field))))))
 
 (defun encode-packet (field)
   (let ((vals (cond
@@ -176,46 +178,54 @@
   (cdr (assoc 'okay *packet-types*)))
 	  
 (defun create-server (port)
-  (let* ((field nil)
-	 (socket (usocket:socket-listen "127.0.0.1" port
-					:reuse-address t
-					:element-type
-					'(unsigned-byte 8)))
-	 (connection (usocket:socket-accept socket))
-
-	 (stream (usocket:socket-stream connection))
-	 (buffer (make-array 260))
-	 (reply nil)
-	 (words '()))
-    (unwind-protect
-	 (let* ((hdr (read-byte stream))
-		(typ (car (elt *packet-types* (ldb (byte 4 4) hdr))))
-		(len (* 4 (ldb (byte 4 0) hdr))))
-	   (format t "hdr: ~x, typ: ~s, len: ~d~%" hdr typ len)
-	   (read-sequence buffer stream :end len)
-	   (setf words (loop for i below (/ len 4) collect
-			    (bytes->dword buffer (* i 4))))
-	   (format t "WORDS: ~S~%" words)
-	   ;; branch according to typ
-	   ;; either set up game, or send data to existing game
-	   (setf reply
-		 (cond
-		   ((eq typ 'param)
-		    (format t "hi~%");
-		    (setf field (apply #'make-field words))
-		    (when *debug*
-		      (print-field field))
-		    (okay-packet words))
-		   ((eq typ 'output)
-		    (tick (which-turn words) field)
-		    (when *debug*
-		      (print-field field))
-		    (encode-packet field))
-		   (t (format t "ERROR: Unrecognized packet HDR: ~X~%" hdr))))
-	   ;; send back results as input pkt
-	   (write-sequence reply stream)
-	   (force-output stream))
-      (progn
-	(format t "Closing socket~%")
-	(usocket:socket-close connection)
-	(usocket:socket-close socket)))))
+  (let ((field nil)
+	(connection nil)
+	(socket (usocket:socket-listen "127.0.0.1" port
+				       :reuse-address t
+				       :element-type
+				       '(unsigned-byte 8))))
+    (loop
+       while t
+       with stream
+       with buffer
+       with words
+       with reply
+       do
+	 (setq connection (usocket:socket-accept socket))
+	 (setq stream (usocket:socket-stream connection))
+	 (setq buffer (make-array 260))
+	 (unwind-protect
+	      (let* ((hdr (read-byte stream))
+		     (typ (car (elt *packet-types*
+				    (ldb (byte 4 4) hdr))))
+		     (len (* 4 (ldb (byte 4 0) hdr))))
+		(format t "hdr: ~x, typ: ~s, len: ~d~%" hdr typ len)
+		(read-sequence buffer stream :end len)
+		(setf words (loop for i below (/ len 4) collect
+				 (bytes->dword buffer (* i 4))))
+		(format t "WORDS: ~S~%" words)
+		;; branch according to typ
+		;; either set up game, or send data to existing game
+		(setf reply
+		      (cond
+			((eq typ 'param)
+			 (format t "hi~%");
+			 (setf field (apply #'make-field words))
+			 (when *debug*
+			   (print-field field))
+			 (okay-packet words))
+			((eq typ 'output)
+			 (tick (which-turn words) field)
+			 (when *debug*
+			   (print-field field))
+			 (encode-packet field))
+			(t (format t "ERROR: Unrecognized packet HDR: ~X~%" hdr))))
+		;; send back results as input pkt
+		(write-sequence reply stream)
+		(force-output stream)
+		(usocket:socket-close connection))))
+    
+    
+    (progn
+      (format t "Closing socket~%")
+      (usocket:socket-close socket))))
