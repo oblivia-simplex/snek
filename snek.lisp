@@ -112,6 +112,7 @@
     (output  #x30)
     (param   #x40)))
 
+(defparameter *output-hdr* #x36)
 
 (defun bytes->dword (vec offset)
   (let ((dword 0))
@@ -158,6 +159,7 @@
    (min #xFFFFFFFF
        (* (field-step field) (length (field-snake field))))))
 
+
 (defun encode-packet (field)
   (let ((vals (cond
 		((deadp field)
@@ -166,11 +168,12 @@
 			      (get-score field)))
 		(:otherwise
 		 (concatenate 'list
-			      (cdr (assoc 'output *packet-types*)) 
+			      `(,*output-hdr*)
 			      (car (field-snake field))
 			      (field-facing field)
 			      (field-apple field))))))
-    (coerce (apply #'append (mapcar #'dword->bytes vals))
+    (coerce (cons (car vals)
+		  (apply #'append (mapcar #'dword->bytes (cdr vals))))
 	    'vector)))
        
 ;;;; rough sockety stuff
