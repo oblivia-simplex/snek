@@ -4,6 +4,8 @@
 
 (in-package :snek)
 
+(defparameter *debug* t)
+
 (defvar *north* '(0 -1))
 (defvar *east*  '(1  0))
 (defvar *south* '(0  1))
@@ -46,9 +48,9 @@
   (flet ((gen () (mod (mersenne:mt-gen (field-prng field)) 4)))
     (elt *directions* (gen))))
 
-(defun tick (field)
-  (unless (equal (field-facing field) *stay*)
-    (incf (field-step field)))
+(defun tick (turn field)
+  (incf (field-step field))
+  (turn-facing turn field)
   ;; advance game state by one tick
   (let ((head (car (field-snake field))))
     (push (move head (field-facing field))
@@ -68,8 +70,7 @@
   (let ((field (make-field radius seed)))
     (loop until (deadp field)
        collect (progn
-		 (setf (field-facing field) (rnd-dir field))
-		 (tick field)
+		 (tick (1- (random 3)) field)
 		 (print-field field)
 		 (format t "~%")))))
 
@@ -104,7 +105,12 @@
 ;; so output, here, is input for the game
 ;; and input, here, is output from the game
 (defparameter *packet-types*
-  '(hello input score output params))
+  '((okay    #x00)
+    (input   #x10)
+    (score   #x20)
+    (output  #x30)
+    (param   #x40)))
+
 
 (defun bytes->dword (vec offset)
   (let ((dword 0))
@@ -137,26 +143,79 @@
 		    idxs)))
     (elt '(-1 0 1) i)))
 
-(defun decode-packet (pkt)
-  ;; pkt is a byte vector
-  (let* ((hdr (aref pkt 0))
-	 (typ (elt *packet-types* (ldb (byte 4 4) hdr)))
-	 (len (ldb (byte 4 0) hdr))
-	 (body (subseq pkt 1))
-	 (vals (loop for i below len collect
-		    (bytes->dword body (* i 4)))))
-    (case typ
-      (output (list typ (which-facing vals)))
-      (params (list typ vals))
-      (:otherwise (list typ vals)))))
-    
+(defun turn-facing (turn field)
+  (setf (field-facing field)
+	(elt *directions* (mod
+			   (+ turn
+			      (position (field-facing field)
+					*directions*
+					:test #'equal))
+			   (length *directions*)))))
+
+(defun get-score (field)
+  (min #xFFFFFFFF
+       (* (field-step field) (length (field-snake field)))))
+
 (defun encode-packet (field)
-  (let ((vals (concatenate 'list
-			   '(#x16)
-			   (car (field-snake field))
-			   (field-facing field)
-			   (field-apple field))))
+  (let ((vals (cond
+		((deadp field)
+		 (concatenate 'list
+			      (cdr (assoc 'score *packet-types*))
+			      (get-score field)))
+		(:otherwise
+		 (concatenate 'list
+			      (cdr (assoc 'output *packet-types*)) 
+			      (car (field-snake field))
+			      (field-facing field)
+			      (field-apple field))))))
     (coerce (apply #'append (mapcar #'dword->bytes vals))
 	    'vector)))
-    
-			   
+       
+;;;; rough sockety stuff
+(defun okay-packet (w)
+  (cdr (assoc 'okay *packet-types*)))
+	  
+(defun create-server (port)
+  (let* ((field nil)
+	 (socket (usocket:socket-listen "127.0.0.1" port
+					:reuse-address t
+					:element-type
+					'(unsigned-byte 8)))
+	 (connection (usocket:socket-accept socket))
+
+	 (stream (usocket:socket-stream connection))
+	 (buffer (make-array 260))
+	 (reply nil)
+	 (words '()))
+    (unwind-protect
+	 (let* ((hdr (read-byte stream))
+		(typ (car (elt *packet-types* (ldb (byte 4 4) hdr))))
+		(len (* 4 (ldb (byte 4 0) hdr))))
+	   (format t "hdr: ~x, typ: ~s, len: ~d~%" hdr typ len)
+	   (read-sequence buffer stream :end len)
+	   (setf words (loop for i below (/ len 4) collect
+			    (bytes->dword buffer (* i 4))))
+	   (format t "WORDS: ~S~%" words)
+	   ;; branch according to typ
+	   ;; either set up game, or send data to existing game
+	   (setf reply
+		 (cond
+		   ((eq typ 'param)
+		    (format t "hi~%");
+		    (setf field (apply #'make-field words))
+		    (when *debug*
+		      (print-field field))
+		    (okay-packet words))
+		   ((eq typ 'output)
+		    (tick (which-turn words) field)
+		    (when *debug*
+		      (print-field field))
+		    (encode-packet field))
+		   (t (format t "ERROR: Unrecognized packet HDR: ~X~%" hdr))))
+	   ;; send back results as input pkt
+	   (write-sequence reply stream)
+	   (force-output stream))
+      (progn
+	(format t "Closing socket~%")
+	(usocket:socket-close connection)
+	(usocket:socket-close socket)))))
