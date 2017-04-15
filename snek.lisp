@@ -29,9 +29,19 @@
   (path '())
   (facing *west*))
 
+(defun new-field (radius seed limit)
+  (let ((field (make-field radius seed limit)))
+    (setf (field-facing field) (rnd-dir field))
+    (setf (field-apple field) (rnd-pos field))
+    field))
+
 (defun deadp (field)
   (if (> (field-step field) *init-length*)
       (or
+       (and (= (field-step field) 32)
+	    (< (length (remove-duplicates (field-snake field)
+					  :test #'equal))
+	       5))
        ;; time limit has been reached
        (>= (field-step field) (field-limit field))
        ;; snake has collided with itself
@@ -79,7 +89,6 @@
 		(butlast (field-snake field)))))))
   
 (defun spawn-apple (field)
-  (format t "** spawning apple! **~%")
   (setf (field-apple field) (rnd-pos field)))
 
 ;; mostly just for testing
@@ -236,7 +245,7 @@
 		(setf reply
 		      (cond
 			((eq typ 'param)
-			 (setf field (apply #'make-field (cdr words)))
+			 (setf field (apply #'new-field (cdr words)))
 			 (if (zerop (car words))
 			     (setf dbg nil)
 			     (progn
