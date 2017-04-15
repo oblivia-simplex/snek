@@ -13,21 +13,30 @@
 (defvar *directions* (list *north* *east* *south* *west*))
 (defvar *init-length* 3)
 
-(defstruct (field (:constructor make-field (radius seed)))
+(defun cls()
+  (format t "~A[H~@*~A[J" #\escape))
+
+(defstruct (field (:constructor make-field (radius seed limit)))
 ;;  (area (make-array (list radius radius)))
   (prng (mersenne:make-mt seed))
+  (limit limit)
   (radius radius)
   (apple `(,(floor (/ radius 4)) ,(floor (/ radius 4))))
   (snake (let ((c 0)) 
 	   (make-list *init-length* :initial-element (list c c))))
   (step 0)
+  ;;(score 0)
+  (path '())
   (facing *west*))
 
 (defun deadp (field)
   (if (> (field-step field) *init-length*)
       (or
+       ;; time limit has been reached
+       (>= (field-step field) (field-limit field))
        ;; snake has collided with itself
-       (< (length (remove-duplicates (field-snake field)))
+       (< (length (remove-duplicates (field-snake field)
+				     :test #'equal))
 	  (length (field-snake field)))
        ;; snake has hit edge of field
        (let ((lo (apply #'min (car (field-snake field))))
@@ -51,9 +60,16 @@
 (defun tick (turn field)
   (unless (deadp field)
     (incf (field-step field))
+;;    (incf (field-score field)
+;;	  (if (zerop turn) (* 2 (- (length (field-snake field))
+;;				   (1- *init-length*)))
+;;	      (- (length (field-snake field))
+;;		 (1- *init-length*))))
+		 
     (turn-facing turn field)
     ;; advance game state by one tick
     (let ((head (car (field-snake field))))
+      (push head (field-path field))
       (push (move head (field-facing field))
 	    (field-snake field))
       (if (equal (car (field-snake field))
@@ -113,6 +129,7 @@
     (param   #x40)))
 
 (defparameter *output-hdr* #x36)
+(defparameter *input-hdr* #x16)
 
 (defun bytes->dword (vec offset)
   (let ((dword 0))
@@ -139,11 +156,12 @@
 
 
 (defun which-turn (vals)
-  (let* ((idxs '(0 1 2))
-	 (i (reduce (lambda (x y)
-		      (if (> (elt vals x) (elt vals y)) x y))
-		    idxs)))
-    (elt '(-1 0 1) i)))
+  (if (= (length (remove-duplicates vals)) 1) 0
+      (let* ((idxs '(0 1 2))
+	     (i (reduce (lambda (x y)
+			  (if (> (elt vals x) (elt vals y)) x y))
+			idxs)))
+	(elt '(-1 0 1) i))))
 
 (defun turn-facing (turn field)
   (setf (field-facing field)
@@ -156,8 +174,10 @@
 
 (defun get-score (field)
   (list
-   (min #xFFFFFFFF
-       (* (field-step field) (length (field-snake field))))))
+   (min #xFFFFFFFF (* (length (remove-duplicates (field-path field)
+						 :test #'equal))
+		      (length (field-snake field))))))
+       ;(* (field-step field) (length (field-snake field))))))
 
 
 (defun encode-packet (field)
@@ -168,7 +188,7 @@
 			      (get-score field)))
 		(:otherwise
 		 (concatenate 'list
-			      `(,*output-hdr*)
+			      `(,*input-hdr*)
 			      (car (field-snake field))
 			      (field-facing field)
 			      (field-apple field))))))
@@ -193,6 +213,7 @@
        with buffer
        with words
        with reply
+       with dbg
        do
 	 (setq connection (usocket:socket-accept socket))
 	 (setq stream (usocket:socket-stream connection))
@@ -202,25 +223,34 @@
 		     (typ (car (elt *packet-types*
 				    (ldb (byte 4 4) hdr))))
 		     (len (* 4 (ldb (byte 4 0) hdr))))
-		(format t "hdr: ~x, typ: ~s, len: ~d~%" hdr typ len)
+		(when dbg
+		  (cls)
+		  (format t "hdr: ~x, typ: ~s, len: ~d~%" hdr typ len))
 		(read-sequence buffer stream :end len)
 		(setf words (loop for i below (/ len 4) collect
 				 (bytes->dword buffer (* i 4))))
-		(format t "WORDS: ~S~%" words)
+		(when dbg
+		  (format t "WORDS: ~S~%" words))
 		;; branch according to typ
 		;; either set up game, or send data to existing game
 		(setf reply
 		      (cond
 			((eq typ 'param)
-			 (format t "hi~%");
-			 (setf field (apply #'make-field words))
-			 (when *debug*
-			   (print-field field))
-			 (okay-packet words))
+			 (setf field (apply #'make-field (cdr words)))
+			 (if (zerop (car words))
+			     (setf dbg nil)
+			     (progn
+			       (setf dbg (car words))
+			       (print-field field)
+			       (sleep (/ 1 dbg))))
+			 (encode-packet field))
 			((eq typ 'output)
 			 (tick (which-turn words) field)
-			 (when *debug*
-			   (print-field field))
+			 (when dbg
+			   (print-field field)
+			   (format t "SCORE: ~D~%" (get-score field))
+			   (sleep (/ 1 dbg))
+			   )
 			 (encode-packet field))
 			(t (format t "ERROR: Unrecognized packet HDR: ~X~%" hdr))))
 		;; send back results as input pkt
