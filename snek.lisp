@@ -16,52 +16,73 @@
 (defun cls()
   (format t "~A[H~@*~A[J" #\escape))
 
-(defstruct (field (:constructor make-field (radius seed limit)))
+(defstruct (field (:constructor make-field (seed
+                                            radius
+                                            limit
+                                            tor
+                                            app)))
 ;;  (area (make-array (list radius radius)))
   (prng (mersenne:make-mt seed))
   (limit limit)
+  (torus (equal tor 1))
   (radius radius)
-  (apple `(,(floor (/ radius 4)) ,(floor (/ radius 4))))
-  (snake (let ((c 0)) 
+  (apple (if (equal app 1)
+             `(,(floor (/ radius 4)) ,(floor (/ radius 4)))
+             `(7 7)))
+  (snake (let ((c 0))
 	   (make-list *init-length* :initial-element (list c c))))
   (step 0)
   ;;(score 0)
   (path '())
   (facing *west*))
 
-(defun new-field (radius seed limit)
-  (let ((field (make-field radius seed limit)))
-    (setf (field-facing field) (rnd-dir field))
-    (setf (field-apple field) (rnd-pos field))
+(defun new-field (seed radius limit torus apple)
+  (let ((field (make-field (1+ seed) radius limit torus apple)))
+    (when (equal apple 1)
+      (spawn-apple field))
     field))
 
 (defun deadp (field)
-  (if (> (field-step field) *init-length*)
-      (or
-       (and (= (field-step field) 32)
-	    (< (length (remove-duplicates (field-snake field)
-					  :test #'equal))
-	       5))
-       ;; time limit has been reached
-       (>= (field-step field) (field-limit field))
-       ;; snake has collided with itself
-       (< (length (remove-duplicates (field-snake field)
-				     :test #'equal))
-	  (length (field-snake field)))
-       ;; snake has hit edge of field
+  (when (> (field-step field) *init-length*)
+    ;; every snake gets a grace period equal to its init-length
+    (or
+     (and (> (field-step field) (* 2 (field-radius field)))
+          (= (car (get-score field)) 1))
+     ;; time limit has been reached
+     (>= (field-step field) (field-limit field))
+     ;; snake has collided with itself
+     (< (length (remove-duplicates (field-snake field)
+                                   :test #'equal))
+        (length (field-snake field)))
+     ;; snake has hit edge of field
+     (when (not (field-torus field))
        (let ((lo (apply #'min (car (field-snake field))))
-	     (hi (apply #'max (car (field-snake field)))))
-	 (or (<= lo (- (field-radius field)))
-	     (>= hi (field-radius field)))))
-      nil))
+             (hi (apply #'max (car (field-snake field)))))
+         (or (<= lo (- (field-radius field)))
+             (>= hi (field-radius field))))))))
 
 (defun move (pos dir) 
   (mapcar #'+ pos dir))
 
+(defun field-move (field)
+  (push (move (car (field-snake field)) (field-facing field))
+        (field-snake field)))
+
+(defun field-torus-move (field)
+  (field-move field)
+  (let ((head-x (caar (field-snake field)))
+        (head-y (cadar (field-snake field))))
+    (cond ((>= (abs head-x) (field-radius field))
+           (setf (caar (field-snake field)) (- head-x)))
+          ((>= (abs head-y) (field-radius field))
+           (setf (cadar (field-snake field)) (- head-y)))
+          (t nil))))
+
 (defun rnd-pos (field)
-  (flet ((gen () (mod (mersenne:mt-gen (field-prng field)) (* 2 (field-radius field)))))
-    (list (- (field-radius field) (gen))
-	  (- (field-radius field) (gen)))))
+  (flet ((gen () (mod (mersenne:mt-gen (field-prng field))
+		      (field-radius field))))
+    (list (- (field-radius field) (+ (gen) (gen)))
+	  (- (field-radius field) (+ (gen) (gen))))))
 
 (defun rnd-dir (field)
   (flet ((gen () (mod (mersenne:mt-gen (field-prng field)) 4)))
@@ -75,24 +96,25 @@
 ;;				   (1- *init-length*)))
 ;;	      (- (length (field-snake field))
 ;;		 (1- *init-length*))))
-		 
+
     (turn-facing turn field)
     ;; advance game state by one tick
     (let ((head (car (field-snake field))))
       (push head (field-path field))
-      (push (move head (field-facing field))
-	    (field-snake field))
+      (if (field-torus field)
+          (field-torus-move field)
+          (field-move field))
       (if (equal (car (field-snake field))
-		 (field-apple field))
-	  (spawn-apple field)
-	  (setf (field-snake field)
-		(butlast (field-snake field)))))))
-  
+                 (field-apple field))
+          (spawn-apple field)
+          (setf (field-snake field)
+                (butlast (field-snake field)))))))
+
 (defun spawn-apple (field)
   (setf (field-apple field) (rnd-pos field)))
 
 ;; mostly just for testing
-(defun random-run (radius seed)
+(defun random-run (seed radius)
   (let ((field (make-field radius seed)))
     (loop until (deadp field)
        collect (progn
@@ -121,7 +143,17 @@
 		(when (= x (1- radius))
 		  (vector-push #\Newline s)))))
     (format t "~a" s)))
-	 
+
+(defun p-dist (p1 p2)
+  (list (- (car p1) (car p2))
+	(- (cadr p1) (cadr p2))))
+
+(defun apple-distance (field)
+  (let (;;(d (field-facing field))
+	(a (field-apple field))
+	(h (car (field-snake field))))
+    (p-dist a h)))
+    
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;            Network Interface                ;;;
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -183,9 +215,16 @@
 
 (defun get-score (field)
   (list
-   (min #xFFFFFFFF (* (length (remove-duplicates (field-path field)
-						 :test #'equal))
-		      (length (field-snake field))))))
+   (max
+    1
+    (-
+     (min #xFFFFFFFF (* (length (remove-duplicates (field-path field)
+                                                   :test #'equal))
+                        (- (length (field-snake field))
+                           (1- *init-length*))))
+     (if (field-torus field)
+         (field-radius field)
+         (field-radius field))))))
        ;(* (field-step field) (length (field-snake field))))))
 
 
@@ -200,7 +239,7 @@
 			      `(,*input-hdr*)
 			      (car (field-snake field))
 			      (field-facing field)
-			      (field-apple field))))))
+			      (apple-distance field))))))
     (coerce (cons (car vals)
 		  (apply #'append (mapcar #'dword->bytes (cdr vals))))
 	    'vector)))
@@ -208,14 +247,15 @@
 ;;;; rough sockety stuff
 (defun okay-packet (w)
   (cdr (assoc 'okay *packet-types*)))
-	  
+
 (defun create-server (port)
   (let ((field nil)
-	(connection nil)
-	(socket (usocket:socket-listen "127.0.0.1" port
-				       :reuse-address t
-				       :element-type
-				       '(unsigned-byte 8))))
+        (connection nil)
+        (params nil)
+        (socket (usocket:socket-listen "127.0.0.1" port
+                                       :reuse-address t
+                                       :element-type
+                                       '(unsigned-byte 8))))
     (loop
        while t
        with stream
@@ -245,12 +285,14 @@
 		(setf reply
 		      (cond
 			((eq typ 'param)
+       (setf params (cdr words))
 			 (setf field (apply #'new-field (cdr words)))
 			 (if (zerop (car words))
 			     (setf dbg nil)
 			     (progn
 			       (setf dbg (car words))
 			       (print-field field)
+             (format t "PARAMS: ~S~%" params)
 			       (sleep (/ 1 dbg))))
 			 (encode-packet field))
 			((eq typ 'output)
@@ -258,16 +300,15 @@
 			 (when dbg
 			   (print-field field)
 			   (format t "SCORE: ~D~%" (get-score field))
-			   (sleep (/ 1 dbg))
-			   )
+         (format t "PARAMS: ~S~%" params)
+			   (sleep (/ 1 dbg)))
 			 (encode-packet field))
 			(t (format t "ERROR: Unrecognized packet HDR: ~X~%" hdr))))
 		;; send back results as input pkt
 		(write-sequence reply stream)
 		(force-output stream)
 		(usocket:socket-close connection))))
-    
-    
     (progn
       (format t "Closing socket~%")
       (usocket:socket-close socket))))
+
