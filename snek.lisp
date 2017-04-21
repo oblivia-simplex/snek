@@ -51,15 +51,13 @@
      ;; time limit has been reached
      (>= (field-step field) (field-limit field))
      ;; snake has collided with itself
-     (< (length (remove-duplicates (field-snake field)
-                                   :test #'equal))
-        (length (field-snake field)))
-     ;; snake has hit edge of field
-     (when (not (field-torus field))
-       (let ((lo (apply #'min (car (field-snake field))))
-             (hi (apply #'max (car (field-snake field)))))
-         (or (<= lo (- (field-radius field)))
-             (>= hi (field-radius field))))))))
+     (let ((collides (hit-obstacle-p (car (field-snake field)) field)))
+       ;; hit-obstacle-p returns t if the head's hit the edge,
+       ;; a list if the head's hit itself,
+       ;; and nil if the head's ok.
+       (and collides
+            (or (null (field-torus field))
+                (listp collides)))))))
 
 (defun move (pos dir) 
   (mapcar #'+ pos dir))
@@ -72,11 +70,10 @@
   (field-move field)
   (let ((head-x (caar (field-snake field)))
         (head-y (cadar (field-snake field))))
-    (cond ((>= (abs head-x) (field-radius field))
-           (setf (caar (field-snake field)) (- head-x)))
-          ((>= (abs head-y) (field-radius field))
-           (setf (cadar (field-snake field)) (- head-y)))
-          (t nil))))
+    (when (>= (abs head-x) (field-radius field)
+       (setf (caar (field-snake field)) (- head-x))))
+    (when (>= (abs head-y) (field-radius field))
+       (setf (cadar (field-snake field)) (- head-y)))))
 
 (defun rnd-pos (field)
   (flet ((gen () (mod (mersenne:mt-gen (field-prng field))
@@ -153,7 +150,51 @@
 	(a (field-apple field))
 	(h (car (field-snake field))))
     (p-dist a h)))
-    
+
+(defun %apple-distance (field)
+  
+  )
+
+(defun turn-snake (field vals)
+  (setf (field-facing field)
+        (turn (field-facing field) (which-turn vals))))
+
+(defun turn (facing turn)
+  (let* ((nd (length *directions*))
+         (idx (position facing *directions* :test #'equal)))
+    (elt *directions* (mod (+ idx turn) nd))))
+
+(defun turn-facing (turn field)
+  (setf (field-facing field)
+        (elt *directions* (mod
+                           (+ turn
+                              (position (field-facing field)
+                                        *directions*
+                                        :test #'equal))
+                           (length *directions*)))))
+
+(defun hit-obstacle-p (head field)
+  (or (<= (field-radius field) (apply #'max (mapcar #'abs head)))
+      (member head (cdr (field-snake field)) :test #'equal)))
+
+(defun hit-apple-p (head field)
+  (equal head (field-apple field)))
+
+(defun distance-dir (head dir field &key (probe #'hit-obstacle-p))
+  (labels ((counter (head field n)
+             (cond ((funcall probe head field) n)
+                   ((> n (field-radius field)) 0)
+                   (t (counter (move head dir) field (1+ n))))))
+    (counter head field 0)))
+
+(defun probe-distance (field &key (probe #'hit-obstacle-p))
+  (let* ((forward (field-facing field))
+         (rightward (turn forward +1))
+         (leftward (turn forward -1))
+         (head (car (field-snake field))))
+    (mapcar (lambda (x) (distance-dir head x field :probe probe))
+            (list leftward forward rightward))))
+
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;            Network Interface                ;;;
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -186,15 +227,6 @@
 (defun neg32p (n)
   (/= 0 (logand #x80000000 n)))
 
-(defun turn-snake (field vals)
-  (setf (field-facing field)
-	(turn (field-facing field) (which-turn vals))))
-
-(defun turn (facing turn)
-  (let* ((nd (length *directions*))
-	 (idx (position facing *directions* :test #'equal)))
-    (elt *directions* (mod (+ idx turn) nd))))
-
 
 (defun which-turn (vals)
   (if (= (length (remove-duplicates vals)) 1) 0
@@ -204,14 +236,6 @@
 			idxs)))
 	(elt '(-1 0 1) i))))
 
-(defun turn-facing (turn field)
-  (setf (field-facing field)
-	(elt *directions* (mod
-			   (+ turn
-			      (position (field-facing field)
-					*directions*
-					:test #'equal))
-			   (length *directions*)))))
 
 (defun get-score (field)
   (list
@@ -237,9 +261,8 @@
 		(:otherwise
 		 (concatenate 'list
 			      `(,*input-hdr*)
-			      (car (field-snake field))
-			      (field-facing field)
-			      (apple-distance field))))))
+            (probe-distance field :probe #'hit-obstacle-p)
+            (probe-distance field :probe #'hit-apple-p))))))
     (coerce (cons (car vals)
 		  (apply #'append (mapcar #'dword->bytes (cdr vals))))
 	    'vector)))
