@@ -4,7 +4,8 @@
   :serial t
   :description "Snek"
   :author "Oblivia Simplex <oblivia@paranoici.org>"
-  :depends-on (#:usocket)
+  :depends-on (#:usocket
+               #:cl-ansi-text)
   :components ((:file "package")
 	       (:file "mersenne")
 	       (:file "snek")))

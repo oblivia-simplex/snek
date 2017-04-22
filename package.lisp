@@ -7,6 +7,7 @@
 (defpackage :snek
   (:use :cl
 	:usocket
+  :cl-ansi-text
 	:mersenne))
 
 
