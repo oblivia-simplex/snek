@@ -107,7 +107,7 @@
       (if (hit-apple-p head field)
           (progn
             (setf (field-step field) (1+ *init-length*))
-            (remove head (field-apples field) :test #'equal)
+            (delete head (field-apples field) :test #'equal)
             (push (rnd-pos field) (field-apples field)))
           (setf (field-snake field)
                 (butlast (field-snake field)))))))
