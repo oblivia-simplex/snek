@@ -382,6 +382,7 @@
 		     (len (* 4 (ldb (byte 4 0) hdr))))
 		(when dbg
 		  (cls)
+                  (format t "Listening on port ~D...~%" port)
 		  (format t "hdr: ~x, typ: ~s, len: ~d~%" hdr typ len))
 		(read-sequence buffer stream :end len)
 		(setf words (loop for i below (/ len 4) collect
