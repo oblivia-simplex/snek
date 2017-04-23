@@ -332,10 +332,10 @@ raised to the power of 1 + the number of apples consumed."
 (defun get-score3 (field)
   "Raph's method: number of (unique) steps + apples * large factor"
   (+ (- (length (unique-points field))
-        (1- (field-radius field))))
-  (* (expt (* (field-radius field) 2) 2)
-     (- (length (field-snake field))
-        *init-length*)))
+        (1- (field-radius field)))
+     (* (expt (* (field-radius field) 2) 2)
+        (- (length (field-snake field))
+           *init-length*))))
 
 (defparameter *scoring-function* #'get-score3)
 
