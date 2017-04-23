@@ -314,33 +314,42 @@
 			idxs)))
 	(elt '(-1 0 1) i))))
 
-(defun get-score (field)
-  (get-score1 field))
 
 (defun get-score1 (field)
-  (list
-   (max 1
-        (min #xFFFFFFFF
-             (+ 0 ;;(max 1 (- (field-step field) (field-radius field)))
-                (round (expt (max 1
-                                  (- (length (remove-duplicates (field-path field)
-                                                                :test #'equal))
-                                     (1- (field-radius field))))
-                             (/ (length (field-snake field))
-                                *init-length*))))))))
+  "The score is equal to the number of unique coordinates visited,
+raised to the power of 1 + the number of apples consumed."
+  (round (expt (max 1
+                    (- (length (unique-points field))
+                       (1- (field-radius field))))
+               (- (length (field-snake field))
+                  (1- *init-length*)))))
 
 (defun get-score2 (field)
+  "Just the number of apples eaten"
+  (- (length (field-snake field))
+     (1- *init-length*)))
+
+(defun get-score3 (field)
+  "Raph's method: number of (unique) steps + apples * large factor"
+  (+ (- (length (unique-points field))
+        (1- (field-radius field))))
+  (* (expt (* (field-radius field) 2) 2)
+     (- (length (field-snake field))
+        *init-length*)))
+
+(defparameter *scoring-function* #'get-score3)
+
+(defun get-score (field)
   (list
    (max 1
         (min #xFFFFFFFF
-             (- (length (field-snake field))
-                (1- *init-length*))))))
+             (funcall *scoring-function* field)))))
 
 (defun encode-packet (field)
   (let ((vals (cond
 		((deadp field)
 		 (concatenate 'list
-			      (cdr (assoc 'score *packet-types*))
+			      (list (logior (cadr (assoc 'score *packet-types*)) 1))
 			      (get-score field)))
 		(:otherwise
 		 (concatenate 'list
