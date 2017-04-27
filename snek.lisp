@@ -12,7 +12,7 @@
 (defvar *south* '(0  1))
 (defvar *west*  '(-1 0))
 (defvar *directions* (list *north* *east* *south* *west*))
-(defvar *init-length* 3)
+(defvar *init-length* 5)
 
 (defun cls()
   (format t "~A[H~@*~A[J" #\escape))
@@ -21,23 +21,24 @@
                                             radius
                                             limit
                                             tor
+                                            len
                                             )))
-;;  (area (make-array (list radius radius)))
   (prng (mersenne:make-mt seed))
   (limit limit)
+  (init-length len)
   (torus (equal tor 1))
   (radius radius)
   (apples ())
   (cacti  ())
   (snake (let ((c 0))
-	   (make-list *init-length* :initial-element (list c c))))
+	   (make-list len :initial-element (list c c))))
   (step 0)
   ;;(score 0)
   (path '())
   (facing *west*))
 
-(defun new-field (seed radius limit torus apples cacti)
-  (let ((field (make-field (1+ seed) radius limit torus)))
+(defun new-field (seed radius limit torus apples cacti len)
+  (let ((field (make-field (1+ seed) radius limit torus len)))
     (when (and (numberp apples) (> apples 0))
       (spawn-apples field apples))
     (when (and (numberp cacti) (> cacti 0))
@@ -48,7 +49,7 @@
   (remove-duplicates (field-path field) :test #'equal))
 
 (defun deadp (field)
-  (when (> (field-step field) *init-length*)
+  (when (> (field-step field) (field-init-length field))
     ;; every snake gets a grace period equal to its init-length
     (or
      ;; time limit has been reached
@@ -97,7 +98,7 @@
     (elt *directions* (gen))))
 
 (defun reset-steps (field)
-  (setf (field-step field) (1+ *init-length*)))
+  (setf (field-step field) (1+ (field-init-length field))))
 
 (defun tick (turn field)
   (unless (deadp field)
@@ -254,6 +255,9 @@
 (defun hit-apple-p (head field)
   (member head (field-apples field) :test #'equal))
 
+(defun untouched-point-p (head field)
+  (not (member head (field-path field) :test #'equal)))
+
 (defun distance-dir (head dir field &key
                                       (probe #'hit-obstacle-p)
                                       (factor 1))
@@ -262,6 +266,12 @@
                    ((> n (field-radius field)) 0)
                    (t (counter (move head dir) field (1+ n))))))
     (* factor (counter head field 0))))
+
+(defun untouched-ahead-at (field)
+  (list (1- (distance-dir (car (field-snake field))
+                      (field-facing field)
+                      field
+                      :probe #'untouched-point-p))))
 
 (defun probe-distance (field &key
                                (probe #'hit-obstacle-p)
@@ -288,8 +298,9 @@
     (output  #x30)
     (param   #x40)))
 
-(defparameter *output-hdr* #x36)
-(defparameter *input-hdr* #x17)
+(defun input-hdr (n)
+  (let ((code (cadr (assoc 'input *packet-types*))))
+    (logior code n)))
 
 (defun bytes->dword (vec offset)
   (let ((dword 0))
@@ -306,44 +317,56 @@
   (/= 0 (logand #x80000000 n)))
 
 
+(defun index-of-greatest (vals)
+  (let ((idxs '(0 1 2)))
+    (reduce (lambda (x y)
+              (if (> (elt vals x) (elt vals y)) x y))
+            idxs)))
+
+
 (defun which-turn (vals)
-  (if (= (length (remove-duplicates vals)) 1) 0
-      (let* ((idxs '(0 1 2))
-	     (i (reduce (lambda (x y)
-			  (if (> (elt vals x) (elt vals y)) x y))
-			idxs)))
-	(elt '(-1 0 1) i))))
+  (cond ((or (> (cadr vals)
+                (max (car vals) (caddr vals)))
+             (= (length (remove-duplicates vals)) 1)
+             (and (= (car vals) (caddr vals))
+                  (> (car vals) (cadr vals))))
+         0)
+        ((> (car vals) (caddr vals)) -1)
+        (t +1)))
 
 
-(defun get-score1 (field)
+(defun get-score1 (field min-dist)
   "The score is equal to the number of unique coordinates visited,
-raised to the power of 1 + the number of apples consumed."
+times 1 + the number of apples consumed, squared."
   (round (expt (max 1
                     (- (length (unique-points field))
-                       (1- (field-radius field))))
+                       (1- min-dist)))
                (- (length (field-snake field))
-                  (1- *init-length*)))))
+                  (field-init-length field)))))
 
-(defun get-score2 (field)
+(defun get-score2 (field _)
   "Just the number of apples eaten"
   (- (length (field-snake field))
-     (1- *init-length*)))
+     (1- (field-init-length field))))
 
-(defun get-score3 (field)
+(defun get-score3 (field min-dist)
   "Raph's method: number of (unique) steps + apples * large factor"
   (* (- (length (unique-points field))
-        (1- (field-radius field)))
+        (1- min-dist))
      (* (field-radius field)
         (- (length (field-snake field))
-           *init-length*))))
+           (field-init-length field)))))
 
 (defparameter *scoring-function* #'get-score1)
 
 (defun get-score (field)
-  (list
-   (max 1
-        (min #xFFFFFFFF
-             (funcall *scoring-function* field)))))
+  (let ((min-dist (if (field-torus field)
+                      (* 2 (field-radius field))
+                      (field-radius field))))
+    (list
+     (max 1
+          (min #xFFFFFFFF
+               (funcall *scoring-function* field min-dist))))))
 
 (defun encode-packet (field)
   (let ((vals (cond
@@ -353,10 +376,12 @@ raised to the power of 1 + the number of apples consumed."
 			      (get-score field)))
 		(:otherwise
 		 (concatenate 'list
-			      `(,*input-hdr*)
+			      (list (input-hdr 8))
             (list (field-step field))
             (probe-distance field :probe #'hit-obstacle-p :factor 1)
-            (probe-distance field :probe #'hit-apple-p :factor 1))))))
+            (probe-distance field :probe #'hit-apple-p :factor #x100)
+            (untouched-ahead-at field)
+            )))))
     (coerce (cons (car vals)
 		  (apply #'append (mapcar #'dword->bytes (cdr vals))))
 	    'vector)))
